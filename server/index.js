@@ -1,14 +1,12 @@
-import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createGeminiProvider } from './ai/providers/gemini.js'
-import { createGroqProvider } from './ai/providers/groq.js'
-import { handleAIRequest } from './ai/service.js'
+import { createAppServer } from './app.js'
+import { createProviders } from './ai/providers/index.js'
+import { parseAllowedOrigins } from './config.js'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const PORT = 3001
-const MAX_BODY_BYTES = 16 * 1024
+const LOCAL_PORT = 3001
 
 async function loadLocalEnv() {
   let contents
@@ -29,71 +27,53 @@ async function loadLocalEnv() {
   }
 }
 
-function sendJson(response, status, body) {
-  response.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  })
-  response.end(JSON.stringify(body))
-}
-
-async function readJsonBody(request) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of request) {
-    size += chunk.length
-    if (size > MAX_BODY_BYTES) throw Object.assign(new Error('too_large'), { status: 413 })
-    chunks.push(chunk)
+function integerSetting(env, name, fallback, min, max) {
+  const raw = env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`Invalid server configuration for ${name}.`)
   }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } catch {
-    throw Object.assign(new Error('invalid_json'), { status: 400 })
-  }
+  return value
 }
 
 await loadLocalEnv()
-const providers = {
-  groq: createGroqProvider(process.env),
-  gemini: createGeminiProvider(process.env),
+
+const isProduction = process.env.NODE_ENV === 'production'
+const port = integerSetting(process.env, 'PORT', LOCAL_PORT, 1, 65_535)
+const staticDir = isProduction ? resolve(ROOT, 'dist') : undefined
+if (staticDir) {
+  try {
+    if (!(await stat(resolve(staticDir, 'index.html'))).isFile()) throw new Error()
+  } catch {
+    process.stderr.write('FrançaisLab production build is missing. Run npm run build before starting the server.\n')
+    process.exit(1)
+  }
 }
 
-const server = createServer(async (request, response) => {
-  const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
-  if (pathname !== '/api/ai') {
-    sendJson(response, 404, { error: { code: 'not_found', message: 'This API route was not found.', retryable: false } })
-    return
-  }
-  if (request.method !== 'POST') {
-    sendJson(response, 405, { error: { code: 'method_not_allowed', message: 'Use POST for this request.', retryable: false } })
-    return
-  }
-  if (!request.headers['content-type']?.toLowerCase().includes('application/json')) {
-    sendJson(response, 415, { error: { code: 'unsupported_media_type', message: 'Send this request as JSON.', retryable: false } })
-    return
-  }
+const providers = createProviders(process.env)
 
-  try {
-    const body = await readJsonBody(request)
-    const result = await handleAIRequest(body, providers)
-    sendJson(response, result.status, result.body)
-  } catch (error) {
-    const status = error?.status === 413 ? 413 : error?.status === 400 ? 400 : 500
-    const body = status === 413
-      ? { error: { code: 'request_too_large', message: 'This selection is too large. Select a shorter passage.', retryable: false } }
-      : status === 400
-        ? { error: { code: 'invalid_json', message: 'The request could not be read. Please try again.', retryable: false } }
-        : { error: { code: 'server_error', message: 'The request could not be completed. Please try again.', retryable: true } }
-    sendJson(response, status, body)
-  }
-})
+let server
+try {
+  server = createAppServer({
+    providers,
+    staticDir,
+    rateLimitMax: integerSetting(process.env, 'AI_RATE_LIMIT_MAX', 20, 1, 5_000),
+    rateLimitWindowMs: integerSetting(process.env, 'AI_RATE_LIMIT_WINDOW_MS', 60_000, 1_000, 86_400_000),
+    trustProxyHops: integerSetting(process.env, 'TRUST_PROXY_HOPS', 0, 0, 10),
+    allowedOrigins: parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
+  })
+} catch (error) {
+  process.stderr.write(`${error.message}\n`)
+  process.exit(1)
+}
 
-server.listen(PORT, '127.0.0.1', () => {
-  process.stdout.write(`FrançaisLab AI API listening on http://127.0.0.1:${PORT}\n`)
+const host = isProduction ? '0.0.0.0' : '127.0.0.1'
+server.listen(port, host, () => {
+  process.stdout.write(`FrançaisLab server listening on ${host}:${port}\n`)
 })
 
 server.on('error', () => {
-  process.stderr.write('FrançaisLab AI API could not start. Check whether port 3001 is already in use.\n')
+  process.stderr.write('FrançaisLab server could not start. Check the port and server configuration.\n')
   process.exitCode = 1
 })
