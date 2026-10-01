@@ -91,8 +91,29 @@ test('Vercel function maps provider failures to the shared safe response', async
   assert.equal(response.body.error.retryable, true)
   assert.deepEqual(response.body.error, {
     code: 'provider_unavailable',
-    message: 'The AI service is temporarily unavailable. Please try again.',
+    message: 'Groq is temporarily unavailable. Please try again.',
     retryable: true,
+    provider: 'Groq',
+    action: 'explain',
+  })
+})
+
+test('Vercel function exposes a sanitized provider rate limit and Retry-After', async () => {
+  const handler = createVercelAIHandler({ providers: {
+    groq: { apiKey: 'mock', name: 'Groq', async complete() { throw new ProviderFailure('rate_limit', true, { status: 429, retryAfterSeconds: 9 }) } },
+    gemini: null,
+  } })
+  const response = mockResponse()
+  await handler(mockRequest({ action: 'grammar', text: 'les fleurs' }), response)
+  assert.equal(response.statusCode, 429)
+  assert.equal(response.headers['Retry-After'], '9')
+  assert.deepEqual(response.body.error, {
+    code: 'provider_rate_limited',
+    message: 'Groq is rate-limiting requests. Please wait about 9 seconds before retrying.',
+    retryable: true,
+    provider: 'Groq',
+    action: 'grammar',
+    retryAfterSeconds: 9,
   })
 })
 

@@ -40,16 +40,21 @@ function HomePage() {
   const [selectionError, setSelectionError] = useState('')
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget
     const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+    if (!file) {
+      input.value = ''
+      return
+    }
     if (!getDocumentType(file)) {
       setSelectionError('Choose a PDF or PowerPoint presentation (.pptx) to continue.')
+      input.value = ''
       return
     }
     setSelectionError('')
-    setSelectedDocument(file)
-    navigate('/reader')
+    const documentId = setSelectedDocument(file)
+    navigate('/reader', { state: { readerDocumentId: documentId } })
+    input.value = ''
   }
 
   return (
@@ -93,6 +98,7 @@ function ReaderPage() {
   const location = useLocation()
   const routeState = location.state as {
     sourceReturn?: unknown
+    readerDocumentId?: unknown
     sourceDocumentId?: unknown
     sourceName?: unknown
     sourceItemId?: unknown
@@ -100,7 +106,9 @@ function ReaderPage() {
     sourcePosition?: unknown
   } | null
   const sourceReturn = routeState?.sourceReturn === true
-  const requestedId = typeof routeState?.sourceDocumentId === 'string' ? routeState.sourceDocumentId : undefined
+  const requestedId = typeof routeState?.sourceDocumentId === 'string'
+    ? routeState.sourceDocumentId
+    : typeof routeState?.readerDocumentId === 'string' ? routeState.readerDocumentId : undefined
   const file = requestedId ? getSessionDocument(requestedId) : getSelectedDocument()
   const documentId = requestedId ?? getSelectedDocumentId()
   const type = file ? getDocumentType(file) : undefined

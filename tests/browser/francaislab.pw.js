@@ -114,6 +114,31 @@ async function openFixture(page, fixture) {
   await expect(page.locator('.pptx-slide, .react-pdf__Page__textContent').first()).toBeVisible()
 }
 
+test('mobile file selection opens PDF and PPTX without reloading and offers recovery after refresh', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+  const initialTimeOrigin = await page.evaluate(() => performance.timeOrigin)
+
+  await page.locator('input[type="file"]').setInputFiles(pdfFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-course.pdf' })).toBeVisible()
+  await expect(page.getByText('Page 1 of 2')).toBeVisible()
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(initialTimeOrigin)
+
+  await page.getByRole('link', { name: 'Choose another file' }).click()
+  await page.locator('input[type="file"]').setInputFiles(pptxFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-slides.pptx' })).toBeVisible()
+  await expect(page.getByText('Slide 1 of 2')).toBeVisible()
+  await expect(page.locator('.pptx-slide')).toContainText('Le café est délicieux.')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(initialTimeOrigin)
+
+  await page.reload()
+  await expect(page.getByText(/If the browser refreshed while opening a document/)).toBeVisible()
+  await page.getByRole('button', { name: 'Choose local PDF or PowerPoint' }).click()
+  await page.locator('.reader-empty input[type="file"]').setInputFiles(pptxFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-slides.pptx' })).toBeVisible()
+  await expect(page.getByText('Slide 1 of 2')).toBeVisible()
+})
+
 async function selectText(page, scopeSelector, phrase) {
   await page.evaluate(({ selector, text }) => {
     const scope = document.querySelector(selector)

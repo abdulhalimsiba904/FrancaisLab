@@ -21,18 +21,24 @@ interface DocumentReaderProps {
 export default function DocumentReader({ file, documentId, initialPosition, sourceLocationMissing = false, missingSourceName, missingSourceItemId, missingSourcePosition, sourceLinkWarning = false }: DocumentReaderProps) {
   const navigate = useNavigate()
   const missingSourceInput = useRef<HTMLInputElement>(null)
+  const readerFileInput = useRef<HTMLInputElement>(null)
   const [sourceError, setSourceError] = useState('')
 
   function handleMissingSourceFile(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget
     const selectedFile = event.target.files?.[0]
-    event.target.value = ''
-    if (!selectedFile) return
+    if (!selectedFile) {
+      input.value = ''
+      return
+    }
     if (selectedFile.name !== missingSourceName) {
       setSourceError(`Choose the original local file named “${missingSourceName}”.`)
+      input.value = ''
       return
     }
     if (!getDocumentType(selectedFile)) {
       setSourceError('Choose the original PDF or PowerPoint file (.pptx).')
+      input.value = ''
       return
     }
     const newDocumentId = setSelectedDocument(selectedFile)
@@ -48,6 +54,25 @@ export default function DocumentReader({ file, documentId, initialPosition, sour
         ...(missingSourcePosition ? { sourcePosition: missingSourcePosition } : {}),
       },
     })
+    input.value = ''
+  }
+
+  function handleReaderFile(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget
+    const selectedFile = event.target.files?.[0]
+    if (!selectedFile) {
+      input.value = ''
+      return
+    }
+    if (!getDocumentType(selectedFile)) {
+      setSourceError('Choose a PDF or PowerPoint presentation (.pptx) to continue.')
+      input.value = ''
+      return
+    }
+    setSourceError('')
+    const readerDocumentId = setSelectedDocument(selectedFile)
+    navigate('/reader', { replace: true, state: { readerDocumentId } })
+    input.value = ''
   }
 
   if (!file) {
@@ -59,12 +84,16 @@ export default function DocumentReader({ file, documentId, initialPosition, sour
           <span className="panel-icon" aria-hidden="true">▤</span>
           <div>
             <h2>{missingSourceName ? 'Select the original source file again' : 'Choose a document to begin'}</h2>
-            <p>{missingSourceName ? `“${missingSourceName}” is no longer available in this app session. Choose that local file again to return to its saved location.` : 'Select a local PDF or PowerPoint from the home page. Your file stays in this browser session.'}</p>
+            <p>{missingSourceName ? `“${missingSourceName}” is no longer available in this app session. Choose that local file again to return to its saved location.` : 'Choose a local PDF or PowerPoint to begin. If the browser refreshed while opening a document, select it again here. Files stay in memory; document contents are never saved.'}</p>
             {missingSourceName ? <>
               <button className="button button-primary" type="button" onClick={() => { setSourceError(''); missingSourceInput.current?.click() }}>Choose original file</button>
               <input ref={missingSourceInput} className="visually-hidden" type="file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" aria-label={`Choose the original source file named ${missingSourceName}`} onChange={handleMissingSourceFile} />
               {sourceError && <p className="reader-message reader-message-error" role="alert">{sourceError}</p>}
-            </> : <NavLink className="button button-primary" to="/">Choose course material</NavLink>}
+            </> : <>
+              <button className="button button-primary" type="button" onClick={() => { setSourceError(''); readerFileInput.current?.click() }}>Choose local PDF or PowerPoint</button>
+              <input ref={readerFileInput} className="visually-hidden" type="file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" aria-label="Choose a local PDF or PowerPoint presentation" onChange={handleReaderFile} />
+              {sourceError && <p className="reader-message reader-message-error" role="alert">{sourceError}</p>}
+            </>}
           </div>
         </div>
       </section>
