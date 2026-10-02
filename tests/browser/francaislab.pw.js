@@ -386,6 +386,28 @@ test('mobile reader has no horizontal overflow; result sheet traps focus, restor
   expect(colorChecks.liveRegions).toBeGreaterThan(0)
 })
 
+test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {
+  await openFixture(page, pptxFixture)
+  await selectText(page, '.pptx-slide', 'délicieux')
+
+  await page.route('**/api/ai', async (route) => route.abort('failed'))
+  const toolbar = page.getByRole('toolbar')
+  await toolbar.getByRole('button', { name: 'Translate', exact: true }).click()
+  const alert = page.getByRole('alert')
+  await expect(alert).toContainText('Could not reach the AI service. Check your connection and try again.')
+  await expect(alert).not.toContainText('local AI server')
+
+  await page.unroute('**/api/ai')
+  await page.route('**/api/ai', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{invalid json' }))
+  await toolbar.getByRole('button', { name: 'Try again' }).click()
+  await expect(alert).toContainText('The AI service returned an unreadable response. Please try again.')
+
+  await page.unroute('**/api/ai')
+  await page.route('**/api/ai', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: '   ' }) }))
+  await toolbar.getByRole('button', { name: 'Try again' }).click()
+  await expect(alert).toContainText('The AI service returned an empty response. Please try again.')
+})
+
 test('localStorage write failures are announced accessibly', async ({ page }) => {
   await page.addInitScript(() => {
     const originalSetItem = Storage.prototype.setItem

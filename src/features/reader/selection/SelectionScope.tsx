@@ -201,7 +201,13 @@ export default function SelectionScope({ children, className = '', sourceName, s
       try {
         body = await response.json()
       } catch {
-        throw new Error('The AI response could not be read. Please try again.')
+        setAiState({
+          status: 'error',
+          action,
+          message: 'The AI service returned an unreadable response. Please try again.',
+          retryable: true,
+        })
+        return
       }
 
       if (!response.ok) {
@@ -217,7 +223,13 @@ export default function SelectionScope({ children, className = '', sourceName, s
 
       const result = body as { result?: unknown; usedBackup?: unknown }
       if (typeof result?.result !== 'string' || !result.result.trim()) {
-        throw new Error('The AI response was empty. Please try again.')
+        setAiState({
+          status: 'error',
+          action,
+          message: 'The AI service returned an empty response. Please try again.',
+          retryable: true,
+        })
+        return
       }
       const value = result.result.trim()
       resultsRef.current = { ...resultsRef.current, [action]: value }
@@ -228,7 +240,7 @@ export default function SelectionScope({ children, className = '', sourceName, s
       setAiState({
         status: 'error',
         action,
-        message: 'The request could not be completed. Check that the local AI server is running, then try again.',
+        message: 'Could not reach the AI service. Check your connection and try again.',
         retryable: true,
       })
     } finally {
