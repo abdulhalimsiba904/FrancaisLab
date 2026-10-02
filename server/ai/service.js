@@ -92,18 +92,43 @@ function makeMessages(input) {
   ]
 }
 
-function errorResult(status, code, message, retryable = false) {
-  return { status, body: { error: { code, message, retryable } } }
+function errorResult(status, code, message, retryable = false, details = {}) {
+  const retryAfterSeconds = details.retryAfterSeconds
+  return {
+    status,
+    body: { error: { code, message, retryable, ...details } },
+    ...(retryAfterSeconds ? { headers: { 'Retry-After': String(retryAfterSeconds) } } : {}),
+  }
 }
 
-function providerErrorResult(error) {
-  if (error.kind === 'credentials' || error.kind === 'request') {
-    return errorResult(502, 'provider_configuration', 'The AI service is not configured correctly. Check the server key and model settings.', false)
+function providerErrorResult(error, providerName, action) {
+  const details = { provider: providerName, action }
+  if (error.kind === 'credentials') {
+    return errorResult(502, 'provider_configuration', `${providerName} rejected its server credentials. Check the server key settings.`, false, details)
+  }
+  if (error.kind === 'request') {
+    return errorResult(502, 'provider_request_rejected', `${providerName} rejected the request. Check the provider model and request configuration.`, false, details)
+  }
+  if (error.kind === 'rate_limit') {
+    const wait = error.retryAfterSeconds ? ` Please wait about ${error.retryAfterSeconds} seconds before retrying.` : ' Please wait before retrying.'
+    return errorResult(429, 'provider_rate_limited', `${providerName} is rate-limiting requests.${wait}`, true, {
+      ...details,
+      ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+    })
+  }
+  if (error.kind === 'timeout') {
+    return errorResult(503, 'provider_timeout', `${providerName} did not respond in time. Please try again.`, true, details)
+  }
+  if (error.kind === 'network') {
+    return errorResult(503, 'provider_network_error', `${providerName} could not be reached. Please try again.`, true, details)
+  }
+  if (error.kind === 'malformed_response') {
+    return errorResult(502, 'provider_invalid_response', `${providerName} returned an unexpected response. This request was not retried.`, false, details)
   }
   if (error.kind === 'unexpected') {
-    return errorResult(502, 'provider_error', 'The AI provider returned an unexpected response. Check the configured model and try again.', false)
+    return errorResult(502, 'provider_error', `${providerName} returned an unexpected error. Please try again later.`, false, details)
   }
-  return errorResult(503, 'provider_unavailable', 'The AI service is temporarily unavailable. Please try again.', true)
+  return errorResult(503, 'provider_unavailable', `${providerName} is temporarily unavailable. Please try again.`, true, details)
 }
 
 export async function handleAIRequest(body, { groq, gemini }) {
@@ -137,9 +162,9 @@ export async function handleAIRequest(body, { groq, gemini }) {
         return { status: 200, body: { action: input.action, result, provider: gemini.name, usedBackup: true } }
       } catch (backupError) {
         const backupFailure = backupError instanceof ProviderFailure ? backupError : new ProviderFailure('unexpected', false)
-        return providerErrorResult(backupFailure)
+        return providerErrorResult(backupFailure, gemini.name, input.action)
       }
     }
-    return providerErrorResult(failure)
+    return providerErrorResult(failure, primary.name, input.action)
   }
 }

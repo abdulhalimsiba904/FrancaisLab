@@ -114,6 +114,31 @@ async function openFixture(page, fixture) {
   await expect(page.locator('.pptx-slide, .react-pdf__Page__textContent').first()).toBeVisible()
 }
 
+test('mobile file selection opens PDF and PPTX without reloading and offers recovery after refresh', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+  const initialTimeOrigin = await page.evaluate(() => performance.timeOrigin)
+
+  await page.locator('input[type="file"]').setInputFiles(pdfFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-course.pdf' })).toBeVisible()
+  await expect(page.getByText('Page 1 of 2')).toBeVisible()
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(initialTimeOrigin)
+
+  await page.getByRole('link', { name: 'Choose another file' }).click()
+  await page.locator('input[type="file"]').setInputFiles(pptxFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-slides.pptx' })).toBeVisible()
+  await expect(page.getByText('Slide 1 of 2')).toBeVisible()
+  await expect(page.locator('.pptx-slide')).toContainText('Le café est délicieux.')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(initialTimeOrigin)
+
+  await page.reload()
+  await expect(page.getByText(/If the browser refreshed while opening a document/)).toBeVisible()
+  await page.getByRole('button', { name: 'Choose local PDF or PowerPoint' }).click()
+  await page.locator('.reader-empty input[type="file"]').setInputFiles(pptxFixture)
+  await expect(page.getByRole('heading', { name: 'synthetic-slides.pptx' })).toBeVisible()
+  await expect(page.getByText('Slide 1 of 2')).toBeVisible()
+})
+
 async function selectText(page, scopeSelector, phrase) {
   await page.evaluate(({ selector, text }) => {
     const scope = document.querySelector(selector)
@@ -359,6 +384,28 @@ test('mobile reader has no horizontal overflow; result sheet traps focus, restor
   }
   expect(contrastRatio('#254e40', '#fbfdf9')).toBeGreaterThan(3)
   expect(colorChecks.liveRegions).toBeGreaterThan(0)
+})
+
+test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {
+  await openFixture(page, pptxFixture)
+  await selectText(page, '.pptx-slide', 'délicieux')
+
+  await page.route('**/api/ai', async (route) => route.abort('failed'))
+  const toolbar = page.getByRole('toolbar')
+  await toolbar.getByRole('button', { name: 'Translate', exact: true }).click()
+  const alert = page.getByRole('alert')
+  await expect(alert).toContainText('Could not reach the AI service. Check your connection and try again.')
+  await expect(alert).not.toContainText('local AI server')
+
+  await page.unroute('**/api/ai')
+  await page.route('**/api/ai', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{invalid json' }))
+  await toolbar.getByRole('button', { name: 'Try again' }).click()
+  await expect(alert).toContainText('The AI service returned an unreadable response. Please try again.')
+
+  await page.unroute('**/api/ai')
+  await page.route('**/api/ai', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: '   ' }) }))
+  await toolbar.getByRole('button', { name: 'Try again' }).click()
+  await expect(alert).toContainText('The AI service returned an empty response. Please try again.')
 })
 
 test('localStorage write failures are announced accessibly', async ({ page }) => {

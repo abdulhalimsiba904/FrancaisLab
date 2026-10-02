@@ -3,6 +3,17 @@ import { ProviderFailure } from '../providerTypes.js'
 const REQUEST_TIMEOUT_MS = 12_000
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
 
+function retryAfterSeconds(response) {
+  const value = response.headers?.get?.('retry-after')
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(Math.ceil(seconds), 300)
+  const date = Date.parse(value)
+  if (!Number.isFinite(date)) return undefined
+  const remaining = Math.ceil((date - Date.now()) / 1000)
+  return remaining > 0 ? Math.min(remaining, 300) : undefined
+}
+
 export async function requestChatCompletion({ endpoint, apiKey, model, messages, maxTokens }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -31,8 +42,16 @@ export async function requestChatCompletion({ endpoint, apiKey, model, messages,
     if (!response.ok) {
       const status = response.status
       const transient = status === 408 || status === 425 || status === 429 || status >= 500
-      const kind = status === 401 || status === 403 ? 'credentials' : transient ? 'service' : 'request'
-      throw new ProviderFailure(kind, transient)
+      const kind = status === 401 || status === 403
+        ? 'credentials'
+        : status === 429
+          ? 'rate_limit'
+          : status === 408
+            ? 'timeout'
+            : status >= 500 || status === 425
+              ? 'service'
+              : 'request'
+      throw new ProviderFailure(kind, transient, { status, retryAfterSeconds: retryAfterSeconds(response) })
     }
 
     let raw = ''

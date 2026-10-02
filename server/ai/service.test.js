@@ -41,7 +41,7 @@ test('permanent Groq failure does not call Gemini', async () => {
   assert.equal(geminiCalls, 0)
   assert.equal(result.status, 502)
   assert.equal(result.body.error.code, 'provider_configuration')
-  assert.equal(JSON.stringify(result).includes('credentials'), false)
+  assert.equal(result.body.error.code.includes('credentials'), false)
 })
 
 test('malformed Groq response does not call Gemini', async () => {
@@ -52,7 +52,54 @@ test('malformed Groq response does not call Gemini', async () => {
   })
 
   assert.equal(geminiCalls, 0)
-  assert.equal(result.status, 503)
+  assert.equal(result.status, 502)
+  assert.equal(result.body.error.code, 'provider_invalid_response')
+  assert.equal(result.body.error.retryable, false)
+})
+
+for (const action of ['grammar', 'example']) {
+  test(`${action} uses the same single transient Groq-to-Gemini fallback`, async () => {
+    let groqCalls = 0
+    let geminiCalls = 0
+    const result = await handleAIRequest({ action, text: 'le vieux livre', ...(action === 'grammar' ? { context: 'Il lit le vieux livre.' } : {}) }, {
+      groq: { apiKey: 'configured', name: 'Groq', async complete() { groqCalls += 1; throw new ProviderFailure('rate_limit', true, { status: 429, retryAfterSeconds: 7 }) } },
+      gemini: { apiKey: 'configured', name: 'Gemini', async complete({ messages }) { geminiCalls += 1; assert.match(messages[1].content, /le vieux livre/u); return 'Une phrase exemple.' } },
+    })
+
+    assert.equal(groqCalls, 1)
+    assert.equal(geminiCalls, 1)
+    assert.equal(result.status, 200)
+    assert.equal(result.body.usedBackup, true)
+    assert.equal(result.body.action, action)
+  })
+}
+
+test('final provider rate limit is distinguishable and carries a bounded retry hint', async () => {
+  const result = await handleAIRequest({ action: 'grammar', text: 'les fleurs' }, {
+    groq: { apiKey: 'configured', name: 'Groq', async complete() { throw new ProviderFailure('rate_limit', true, { status: 429, retryAfterSeconds: 9999 }) } },
+    gemini: null,
+  })
+  assert.equal(result.status, 429)
+  assert.equal(result.body.error.code, 'provider_rate_limited')
+  assert.equal(result.body.error.provider, 'Groq')
+  assert.equal(result.body.error.action, 'grammar')
+  assert.equal(result.body.error.retryAfterSeconds, 300)
+  assert.equal(result.body.error.retryable, true)
+  assert.deepEqual(result.headers, { 'Retry-After': '300' })
+})
+
+test('transient backup failure reports the backup provider category without another retry', async () => {
+  let groqCalls = 0
+  let geminiCalls = 0
+  const result = await handleAIRequest({ action: 'example', text: 'la mer' }, {
+    groq: { apiKey: 'configured', name: 'Groq', async complete() { groqCalls += 1; throw new ProviderFailure('timeout', true) } },
+    gemini: { apiKey: 'configured', name: 'Gemini', async complete() { geminiCalls += 1; throw new ProviderFailure('service', true, { status: 503 }) } },
+  })
+  assert.equal(groqCalls, 1)
+  assert.equal(geminiCalls, 1)
+  assert.equal(result.body.error.code, 'provider_unavailable')
+  assert.equal(result.body.error.provider, 'Gemini')
+  assert.equal(result.body.error.action, 'example')
 })
 
 test('Gemini can answer directly when Groq is not configured', async () => {

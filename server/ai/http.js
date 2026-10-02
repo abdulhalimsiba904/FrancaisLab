@@ -101,7 +101,7 @@ export async function handleAIEndpoint(request, response, {
   try {
     const body = await readJsonBody(request)
     const result = await handleAIRequest(body, providers)
-    sendJson(response, result.status, result.body)
+    sendJson(response, result.status, result.body, result.headers)
   } catch (error) {
     const status = error?.status === 413 ? 413 : error?.status === 400 ? 400 : 500
     const body = status === 413
