@@ -139,7 +139,7 @@ test('mobile file selection opens PDF and PPTX without reloading and offers reco
   await expect(page.getByText('Slide 1 of 2')).toBeVisible()
 })
 
-async function selectText(page, scopeSelector, phrase) {
+async function setSelectionText(page, scopeSelector, phrase) {
   await page.evaluate(({ selector, text }) => {
     const scope = document.querySelector(selector)
     if (!scope) throw new Error(`Selection scope not found: ${selector}`)
@@ -158,6 +158,10 @@ async function selectText(page, scopeSelector, phrase) {
     }
     throw new Error(`Text not found in reader: ${text}`)
   }, { selector: scopeSelector, text: phrase })
+}
+
+async function selectText(page, scopeSelector, phrase) {
+  await setSelectionText(page, scopeSelector, phrase)
   await expect(page.getByRole('toolbar', { name: new RegExp(`Actions for selected text: ${phrase}`) })).toBeVisible()
 }
 
@@ -384,6 +388,56 @@ test('mobile reader has no horizontal overflow; result sheet traps focus, restor
   }
   expect(contrastRatio('#254e40', '#fbfdf9')).toBeGreaterThan(3)
   expect(colorChecks.liveRegions).toBeGreaterThan(0)
+})
+
+test('mobile PDF and PPTX selections wait for touch adjustment and keep the toolbar away from selected text', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+
+  for (const sample of [
+    { fixture: pdfFixture, selector: '.pdf-selection-scope', initial: 'quotidien', final: 'journal quotidien' },
+    { fixture: pptxFixture, selector: '.pptx-slide', initial: 'délicieux', final: 'café est délicieux' },
+  ]) {
+    await openFixture(page, sample.fixture)
+    await setSelectionText(page, sample.selector, sample.initial)
+    const initialToolbar = page.getByRole('toolbar', { name: new RegExp(`Actions for selected text: ${sample.initial}`) })
+    await expect(initialToolbar).toHaveCount(0)
+    await expect(initialToolbar).toBeVisible()
+
+    const clearOfSelection = await page.evaluate(() => {
+      const selection = window.getSelection()
+      const textRect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null
+      const toolbar = document.querySelector('.selection-toolbar')?.getBoundingClientRect()
+      if (!textRect || !toolbar) return false
+      return toolbar.bottom <= textRect.top || toolbar.top >= textRect.bottom
+    })
+    expect(clearOfSelection).toBe(true)
+
+    await page.evaluate(() => {
+      const toolbar = document.querySelector('.selection-toolbar')
+      toolbar?.dispatchEvent(new TouchEvent('touchstart', { bubbles: true }))
+      toolbar?.dispatchEvent(new TouchEvent('touchend', { bubbles: true }))
+    })
+    await expect(initialToolbar).toBeVisible()
+
+    await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' })))
+    await expect(page.getByRole('toolbar')).toHaveCount(0)
+    await page.evaluate(() => {
+      window.getSelection()?.removeAllRanges()
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    await page.waitForTimeout(360)
+    await expect(page.getByRole('toolbar')).toHaveCount(0)
+
+    await setSelectionText(page, sample.selector, sample.final)
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }))
+    })
+    const adjustedToolbar = page.getByRole('toolbar', { name: new RegExp(`Actions for selected text: ${sample.final}`) })
+    await expect(adjustedToolbar).toBeVisible()
+    expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe(sample.final)
+    await expect(page.locator('html')).toHaveJSProperty('scrollWidth', 390)
+  }
 })
 
 test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {

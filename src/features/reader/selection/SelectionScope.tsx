@@ -22,6 +22,8 @@ interface ToolbarPosition {
 type AIAction = SavedResultAction
 type AIResults = Partial<Record<AIAction, string>>
 
+const MOBILE_SELECTION_SETTLE_MS = 320
+
 type AIState =
   | { status: 'idle' }
   | { status: 'loading'; action: AIAction }
@@ -74,6 +76,8 @@ export default function SelectionScope({ children, className = '', sourceName, s
   const dialogWasOpenRef = useRef(false)
   const rangeRef = useRef<Range | null>(null)
   const preserveSelectionRef = useRef(false)
+  const touchPointerActiveRef = useRef(false)
+  const selectionSettleTimerRef = useRef<number | undefined>()
   const selectedTextRef = useRef('')
   const resultsRef = useRef<AIResults>({})
   const requestRef = useRef<AbortController | null>(null)
@@ -83,11 +87,16 @@ export default function SelectionScope({ children, className = '', sourceName, s
   const [results, setResults] = useState<AIResults>({})
   const [saveMessage, setSaveMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const [mobileViewport, setMobileViewport] = useState(false)
+  const [selectionStable, setSelectionStable] = useState(false)
   const [mobileSheetDismissed, setMobileSheetDismissed] = useState(false)
   const [selectionAnnouncement, setSelectionAnnouncement] = useState('')
   const mobileDialogOpen = mobileViewport && aiState.status !== 'idle' && !mobileSheetDismissed
 
   const clearSelection = useCallback(() => {
+    if (selectionSettleTimerRef.current !== undefined) {
+      window.clearTimeout(selectionSettleTimerRef.current)
+      selectionSettleTimerRef.current = undefined
+    }
     if (selectedTextRef.current) setSelectionAnnouncement('Text selection cleared.')
     requestRef.current?.abort()
     requestRef.current = null
@@ -97,6 +106,7 @@ export default function SelectionScope({ children, className = '', sourceName, s
     setResults({})
     setSaveMessage(null)
     setMobileSheetDismissed(false)
+    setSelectionStable(false)
     setToolbar(null)
     setPosition(null)
     setAiState({ status: 'idle' })
@@ -116,30 +126,49 @@ export default function SelectionScope({ children, className = '', sourceName, s
     const viewportWidth = viewport?.width ?? document.documentElement.clientWidth
     const viewportHeight = viewport?.height ?? window.innerHeight
     const rangeRects = Array.from(range.getClientRects())
-    const visibleRect = rangeRects.find((rect) =>
+    const visibleRects = rangeRects.filter((rect) =>
       rect.bottom > viewportTop && rect.top < viewportTop + viewportHeight
       && rect.right > viewportLeft && rect.left < viewportLeft + viewportWidth,
     )
+    const visibleRect = visibleRects[0]
     if (!visibleRect) {
       setPosition(null)
       return
     }
 
     const toolbarRect = toolbarElement.getBoundingClientRect()
-    const gap = 9
-    const above = visibleRect.top - toolbarRect.height - gap
-    const below = visibleRect.bottom + gap
-    const top = above >= viewportTop + 8
-      ? above
-      : Math.min(below, viewportTop + viewportHeight - toolbarRect.height - 8)
-    const desiredLeft = visibleRect.left + visibleRect.width / 2 - toolbarRect.width / 2
+    const gap = 12
+    const selectionTop = Math.min(...visibleRects.map((rect) => rect.top))
+    const selectionBottom = Math.max(...visibleRects.map((rect) => rect.bottom))
+    const selectionCenterY = (selectionTop + selectionBottom) / 2
+    const selectionInLowerHalf = selectionCenterY >= viewportTop + viewportHeight / 2
+    const above = selectionTop - toolbarRect.height - gap
+    const below = selectionBottom + gap
+    const topSpace = selectionTop - viewportTop
+    const bottomSpace = viewportTop + viewportHeight - selectionBottom
+    const topFits = topSpace >= toolbarRect.height + 16
+    const bottomFits = bottomSpace >= toolbarRect.height + 16
+    const top = mobileViewport
+      ? topFits && (!bottomFits || topSpace >= bottomSpace)
+        ? viewportTop + 8
+        : bottomFits
+          ? viewportTop + viewportHeight - toolbarRect.height - 8
+          : selectionInLowerHalf
+            ? viewportTop + 8
+            : viewportTop + viewportHeight - toolbarRect.height - 8
+      : above >= viewportTop + 8
+        ? above
+        : Math.min(below, viewportTop + viewportHeight - toolbarRect.height - 8)
+    const desiredLeft = mobileViewport
+      ? viewportLeft + viewportWidth / 2 - toolbarRect.width / 2
+      : visibleRect.left + visibleRect.width / 2 - toolbarRect.width / 2
     const left = Math.max(viewportLeft + 8, Math.min(desiredLeft, viewportLeft + viewportWidth - toolbarRect.width - 8))
     setPosition({ top, left })
-  }, [])
+  }, [mobileViewport])
 
   useLayoutEffect(() => {
     if (toolbar) updatePosition()
-  }, [toolbar, aiState, results, saveMessage, mobileViewport, mobileSheetDismissed, updatePosition])
+  }, [toolbar, selectionStable, aiState, results, saveMessage, mobileViewport, mobileSheetDismissed, updatePosition])
 
   useEffect(() => {
     const query = window.matchMedia('(max-width: 760px)')
@@ -258,12 +287,15 @@ export default function SelectionScope({ children, className = '', sourceName, s
       return Boolean(element && scope.contains(element))
     }
 
-    function onSelectionChange() {
+    function commitCurrentSelection() {
       const selection = document.getSelection()
       const text = selection?.toString() ?? ''
       if (!selection || !text.trim()) {
         const activeElement = document.activeElement
-        if (preserveSelectionRef.current || (activeElement && toolbarRef.current?.contains(activeElement))) return
+        if (preserveSelectionRef.current || (activeElement && toolbarRef.current?.contains(activeElement))) {
+          setSelectionStable(true)
+          return
+        }
         clearSelection()
         return
       }
@@ -286,18 +318,72 @@ export default function SelectionScope({ children, className = '', sourceName, s
       selectedTextRef.current = normalizedText
       rangeRef.current = selection.getRangeAt(0).cloneRange()
       setToolbar({ text: normalizedText })
+      setSelectionStable(true)
+    }
+
+    function scheduleMobileSelectionCommit() {
+      if (selectionSettleTimerRef.current !== undefined) window.clearTimeout(selectionSettleTimerRef.current)
+      selectionSettleTimerRef.current = window.setTimeout(() => {
+        selectionSettleTimerRef.current = undefined
+        if (!touchPointerActiveRef.current) commitCurrentSelection()
+      }, MOBILE_SELECTION_SETTLE_MS)
+    }
+
+    function onSelectionChange() {
+      if (mobileViewport) {
+        setSelectionStable(false)
+        scheduleMobileSelectionCommit()
+        return
+      }
+      commitCurrentSelection()
     }
 
     function onPointerDown(event: PointerEvent) {
       const target = event.target
       if (target instanceof Node && (toolbarRef.current?.contains(target) || sheetBackdropRef.current?.contains(target))) return
+      if (event.pointerType === 'touch') {
+        touchPointerActiveRef.current = true
+        setSelectionStable(false)
+        if (selectionSettleTimerRef.current !== undefined) {
+          window.clearTimeout(selectionSettleTimerRef.current)
+          selectionSettleTimerRef.current = undefined
+        }
+        return
+      }
       preserveSelectionRef.current = false
       clearSelection()
+    }
+
+    function onPointerUp(event: PointerEvent) {
+      if (event.pointerType !== 'touch' && !touchPointerActiveRef.current) return
+      touchPointerActiveRef.current = false
+      if (mobileViewport) scheduleMobileSelectionCommit()
+    }
+
+    function onTouchStart(event: TouchEvent) {
+      const target = event.target
+      if (target instanceof Node && (toolbarRef.current?.contains(target) || sheetBackdropRef.current?.contains(target))) return
+      touchPointerActiveRef.current = true
+      setSelectionStable(false)
+      if (selectionSettleTimerRef.current !== undefined) {
+        window.clearTimeout(selectionSettleTimerRef.current)
+        selectionSettleTimerRef.current = undefined
+      }
+    }
+
+    function onTouchEnd() {
+      touchPointerActiveRef.current = false
+      if (mobileViewport) scheduleMobileSelectionCommit()
     }
 
     const reposition = () => updatePosition()
     document.addEventListener('selectionchange', onSelectionChange)
     document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('pointerup', onPointerUp, true)
+    document.addEventListener('pointercancel', onPointerUp, true)
+    document.addEventListener('touchstart', onTouchStart, true)
+    document.addEventListener('touchend', onTouchEnd, true)
+    document.addEventListener('touchcancel', onTouchEnd, true)
     window.addEventListener('scroll', reposition, true)
     window.addEventListener('resize', reposition)
     window.visualViewport?.addEventListener('scroll', reposition)
@@ -306,14 +392,20 @@ export default function SelectionScope({ children, className = '', sourceName, s
     return () => {
       document.removeEventListener('selectionchange', onSelectionChange)
       document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('pointerup', onPointerUp, true)
+      document.removeEventListener('pointercancel', onPointerUp, true)
+      document.removeEventListener('touchstart', onTouchStart, true)
+      document.removeEventListener('touchend', onTouchEnd, true)
+      document.removeEventListener('touchcancel', onTouchEnd, true)
       window.removeEventListener('scroll', reposition, true)
       window.removeEventListener('resize', reposition)
       window.visualViewport?.removeEventListener('scroll', reposition)
       window.visualViewport?.removeEventListener('resize', reposition)
+      if (selectionSettleTimerRef.current !== undefined) window.clearTimeout(selectionSettleTimerRef.current)
       requestRef.current?.abort()
       rangeRef.current = null
     }
-  }, [clearSelection, updatePosition])
+  }, [clearSelection, mobileViewport, updatePosition])
 
   const saveSelected = useCallback(() => {
     const text = selectedTextRef.current
@@ -364,7 +456,7 @@ export default function SelectionScope({ children, className = '', sourceName, s
     <>
       <div ref={scopeRef} className={`selection-scope ${className}`.trim()}>{children}</div>
       <span className="visually-hidden" role="status" aria-live="polite">{selectionAnnouncement}</span>
-      {toolbar && createPortal(
+      {toolbar && (!mobileViewport || selectionStable) && createPortal(
         <>
         <div
           ref={toolbarRef}
