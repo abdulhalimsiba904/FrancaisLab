@@ -440,6 +440,58 @@ test('mobile PDF and PPTX selections wait for touch adjustment and keep the tool
   }
 })
 
+test('mobile PDF zoom keeps the native text layer aligned with the rendered page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openFixture(page, pdfFixture)
+  const pageBox = page.locator('.react-pdf__Page')
+  const canvas = page.locator('.react-pdf__Page__canvas')
+  const textLayer = page.locator('.react-pdf__Page__textContent')
+
+  const textPositionRatio = async () => page.evaluate(() => {
+    const pageElement = document.querySelector('.react-pdf__Page')
+    const spans = [...document.querySelectorAll('.react-pdf__Page__textContent span')]
+    const span = spans.find((element) => element.textContent?.includes('journal quotidien'))
+    if (!pageElement || !span) return null
+    const text = span.firstChild
+    if (!text || text.nodeType !== Node.TEXT_NODE) return null
+    const wordStart = text.textContent.indexOf('quotidien')
+    const range = document.createRange()
+    range.setStart(text, wordStart)
+    range.setEnd(text, wordStart + 'quotidien'.length)
+    const pageRect = pageElement.getBoundingClientRect()
+    const wordRect = range.getBoundingClientRect()
+    return (wordRect.left - pageRect.left) / pageRect.width
+  })
+
+  const initialPosition = await textPositionRatio()
+  expect(initialPosition).not.toBeNull()
+  await page.getByRole('button', { name: 'Zoom in' }).click()
+  const zoomedPosition = await textPositionRatio()
+  expect(zoomedPosition).not.toBeNull()
+  expect(Math.abs(zoomedPosition - initialPosition)).toBeLessThan(0.03)
+
+  const dimensions = await page.evaluate(() => {
+    const pageRect = document.querySelector('.react-pdf__Page')?.getBoundingClientRect()
+    const canvasRect = document.querySelector('.react-pdf__Page__canvas')?.getBoundingClientRect()
+    const textRect = document.querySelector('.react-pdf__Page__textContent')?.getBoundingClientRect()
+    const viewport = document.querySelector('.pdf-page-wrap')
+    return {
+      pageWidth: pageRect?.width,
+      canvasWidth: canvasRect?.width,
+      textWidth: textRect?.width,
+      viewportWidth: viewport?.clientWidth,
+      viewportScrollWidth: viewport?.scrollWidth,
+    }
+  })
+  expect(dimensions.pageWidth).toBeGreaterThan(dimensions.viewportWidth)
+  expect(dimensions.viewportScrollWidth).toBeGreaterThan(dimensions.viewportWidth)
+  expect(Math.abs(dimensions.pageWidth - dimensions.canvasWidth)).toBeLessThan(1)
+  expect(Math.abs(dimensions.pageWidth - dimensions.textWidth)).toBeLessThan(1)
+  await expect(pageBox).toBeVisible()
+  await expect(canvas).toBeVisible()
+  await expect(textLayer).toContainText('Le journal quotidien')
+})
+
 test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {
   await openFixture(page, pptxFixture)
   await selectText(page, '.pptx-slide', 'délicieux')
