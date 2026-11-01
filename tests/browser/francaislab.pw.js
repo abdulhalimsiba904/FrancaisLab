@@ -492,6 +492,43 @@ test('mobile PDF zoom keeps the native text layer aligned with the rendered page
   await expect(textLayer).toContainText('Le journal quotidien')
 })
 
+test('mobile PDF toolbar waits through pauses while a long native selection is adjusted', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openFixture(page, pdfFixture)
+  const toolbar = page.getByRole('toolbar')
+
+  await page.evaluate(() => {
+    const scope = document.querySelector('.pdf-selection-scope')
+    const textNodes = [...scope.querySelectorAll('.react-pdf__Page__textContent span')]
+      .map((span) => span.firstChild)
+      .filter((node) => node?.nodeType === Node.TEXT_NODE)
+    const start = textNodes.find((node) => node.textContent.includes('Le journal'))
+    const end = textNodes.find((node) => node.textContent.includes('Elle lit'))
+    if (!start || !end) throw new Error('Expected text nodes for the synthetic PDF sentences')
+    const selection = window.getSelection()
+    selection.collapse(start, 0)
+    selection.extend(end, end.textContent.length)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  await page.waitForTimeout(400)
+  await expect(toolbar).toHaveCount(0)
+
+  await page.evaluate(() => {
+    const scope = document.querySelector('.pdf-selection-scope')
+    const end = [...scope.querySelectorAll('.react-pdf__Page__textContent span')]
+      .map((span) => span.firstChild)
+      .find((node) => node?.textContent.includes('Elle lit'))
+    window.getSelection().extend(end, 'Elle lit le journal dans'.length)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  await page.waitForTimeout(400)
+  await expect(toolbar).toHaveCount(0)
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('Elle lit le journal dans')
+
+  await expect(toolbar).toBeVisible({ timeout: 2_000 })
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('Elle lit le journal dans')
+})
+
 test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {
   await openFixture(page, pptxFixture)
   await selectText(page, '.pptx-slide', 'délicieux')

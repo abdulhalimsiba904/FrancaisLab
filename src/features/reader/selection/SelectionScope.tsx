@@ -22,7 +22,9 @@ interface ToolbarPosition {
 type AIAction = SavedResultAction
 type AIResults = Partial<Record<AIAction, string>>
 
-const MOBILE_SELECTION_SETTLE_MS = 320
+// Mobile PDF text handles can pause between selectionchange events while a
+// student repositions them. Wait for a longer quiet window before showing UI.
+const MOBILE_SELECTION_SETTLE_MS = 750
 
 type AIState =
   | { status: 'idle' }
