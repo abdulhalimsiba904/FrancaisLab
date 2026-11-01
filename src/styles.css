@@ -67,7 +67,7 @@ button.button{font-family:inherit;border:0;cursor:pointer}
 .pdf-page-wrap .pdf-selection-scope{display:flex;flex:0 0 auto;justify-content:center;width:max-content;min-width:100%;max-width:none}
 .pdf-page-wrap .react-pdf__Page{flex:0 0 auto;background:white;box-shadow:0 5px 24px rgba(35,47,39,.12)}
 .pdf-page-wrap .react-pdf__Page__canvas{display:block}
-.pdf-page-wrap .react-pdf__Page__textContent{user-select:text}
+.pdf-page-wrap .react-pdf__Page__textContent,.pdf-page-wrap .react-pdf__Page__textContent span{-webkit-user-select:text;user-select:text}
 .pdf-page-wrap ::selection,.pptx-slide ::selection{background:#cce4c8;color:#203a2a}
 .reader-message{margin:18px;padding:14px 16px;border:1px solid #e2e6dc;border-radius:7px;background:#fff;color:#59655c;font-size:12px;line-height:1.6}
 .reader-message-error{background:#fff7f3;color:#8c4937;border-color:#f0d8cd}

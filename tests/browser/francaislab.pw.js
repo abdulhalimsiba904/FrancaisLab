@@ -529,6 +529,47 @@ test('mobile PDF toolbar waits through pauses while a long native selection is a
   expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('Elle lit le journal dans')
 })
 
+test('mobile PDF selection stays continuous across text-layer line boundaries', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openFixture(page, pdfFixture)
+
+  const selectedText = await page.evaluate(() => {
+    const spans = [...document.querySelectorAll('.pdf-selection-scope .react-pdf__Page__textContent span')]
+    const firstLine = spans.find((span) => span.textContent?.includes('Le journal quotidien'))?.firstChild
+    const secondLine = spans.find((span) => span.textContent?.includes('Elle lit le journal'))?.firstChild
+    if (!firstLine || !secondLine) throw new Error('Expected separate PDF.js spans for adjacent PDF lines')
+    const firstOffset = firstLine.textContent.indexOf('quotidien')
+    const lastOffset = secondLine.textContent.indexOf('jardin') + 'jardin'.length
+    const selection = window.getSelection()
+    selection.removeAllRanges()
+    selection.setBaseAndExtent(firstLine, firstOffset, secondLine, lastOffset)
+    document.dispatchEvent(new Event('selectionchange'))
+    return selection.toString()
+  })
+
+  expect(selectedText).toContain('quotidien')
+  expect(selectedText).toContain('Elle lit le journal dans le jardin')
+  const toolbar = page.getByRole('toolbar')
+  await expect(toolbar).toBeVisible()
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(selectedText)
+
+  const geometry = await page.evaluate(() => {
+    const selected = window.getSelection()
+    const rects = selected?.rangeCount ? [...selected.getRangeAt(0).getClientRects()] : []
+    const pageRect = document.querySelector('.react-pdf__Page').getBoundingClientRect()
+    const toolbarRect = document.querySelector('.selection-toolbar').getBoundingClientRect()
+    return {
+      lineCount: rects.length,
+      withinPage: rects.every((rect) => rect.left >= pageRect.left && rect.right <= pageRect.right),
+      toolbarClear: toolbarRect.bottom <= Math.min(...rects.map((rect) => rect.top))
+        || toolbarRect.top >= Math.max(...rects.map((rect) => rect.bottom)),
+    }
+  })
+  expect(geometry.lineCount).toBeGreaterThan(1)
+  expect(geometry.withinPage).toBe(true)
+  expect(geometry.toolbarClear).toBe(true)
+})
+
 test('AI transport and malformed responses show distinct environment-neutral errors', async ({ page }) => {
   await openFixture(page, pptxFixture)
   await selectText(page, '.pptx-slide', 'délicieux')
